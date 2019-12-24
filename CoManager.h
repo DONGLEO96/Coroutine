@@ -4,40 +4,41 @@
 #include<ucontext.h>
 #include<list>
 #include<map>
+#include<stack>
 using namespace std;
 
 #define STACKSIZE (1024*1024)
 typedef std::function<void()> Function;
-enum  COSTATE { FREE = 0, RUNNABLE, RUNNING, SUSPEND };
+enum  COSTATE { FREE = 0, UNINIT, STARTED };
 struct Coroutine
 {
-	ucontext_t ctx;//Ğ­³ÌÉÏÏÂÎÄ
-	Function func;//Ğ­³ÌÖ´ĞĞµÄº¯Êı
-	COSTATE state;//µ±Ç°Ğ­³Ì×´Ì¬
-	char* stack=NULL;//Ğ­³Ì±»»»³öÊ±±£´æÉÏÏÂÎÄ
-	int size;//±£´æµÄÉÏÏÂÎÄ´óĞ¡
+	ucontext_t ctx;//åç¨‹ä¸Šä¸‹æ–‡
+	Function func;//åç¨‹æ‰§è¡Œçš„å‡½æ•°
+	COSTATE state;//å½“å‰åç¨‹çŠ¶æ€
+	char* stack=NULL;//åç¨‹è¢«æ¢å‡ºæ—¶ä¿å­˜ä¸Šä¸‹æ–‡
+	int size;//ä¿å­˜çš„ä¸Šä¸‹æ–‡å¤§å°
 };
 class CoManager
 {
 public:
 	CoManager(int coroutinemaxnum = 1024,int cachenum=16);
 	~CoManager();
-	void coresume(int id);//»½ĞÑ¶ÔÓ¦idµÄĞ­³Ì
-	void coyield();//Í£Ö¹µ±Ç°Ğ­³Ì²¢·µ»Øµ½Ö÷Ğ­³Ì
-	int cocreate(Function func);//´´½¨Ò»¸öĞ­³Ì
-	bool cofinished();//È·ÈÏÊÇ·ñËùÓĞĞ­³Ì¶¼ÒÑ¾­Ö´ĞĞÍê±Ï
-	void codelete(int id);//É¾³ı¶ÔÓ¦idĞ­³Ì²¢ÊÍ·Å¶ÔÓ¦¿Õ¼ä
+	void coresume(int id);//å”¤é†’å¯¹åº”idçš„åç¨‹
+	void coyield();//åœæ­¢å½“å‰åç¨‹å¹¶è¿”å›åˆ°ä¸»åç¨‹
+	int cocreate(Function func);//åˆ›å»ºä¸€ä¸ªåç¨‹
+	bool cofinished();//ç¡®è®¤æ˜¯å¦æ‰€æœ‰åç¨‹éƒ½å·²ç»æ‰§è¡Œå®Œæ¯•
+	void codelete(int id);//åˆ é™¤å¯¹åº”idåç¨‹å¹¶é‡Šæ”¾å¯¹åº”ç©ºé—´
 private:
 	vector<Coroutine> coroutines;
-	ucontext_t main_ctx;//Ö÷Ğ­³ÌÉÏÏÂÎÄ
-	int runid;//ÕıÔÚÖ´ĞĞµÄĞ­³Ìid
-	int maxIndex;//Ê¹ÓÃ¹ıµÄ×î´óĞ­³Ìid
+	ucontext_t main_ctx;//ä¸»åç¨‹ä¸Šä¸‹æ–‡
+	int runid;//æ­£åœ¨æ‰§è¡Œçš„åç¨‹id
+	int maxIndex;//ä½¿ç”¨è¿‡çš„æœ€å¤§åç¨‹id
+	int cachenum;//ç¼“å­˜å…±äº«æ ˆçš„ä¸ªæ•°
+	stack<int> co_record;//ç”¨äºè®°å½•åç¨‹çš„è°ƒç”¨å±‚æ¬¡
 	static void execFunc(CoManager* c);
-	int cachenum;//»º´æ¹²ÏíÕ»µÄ¸öÊı
-	list<pair<int,char*>> sharedStackpool;//¹²ÏíÕ»»º´æÁ´±í,´æ·ÅĞ­³ÌidºÍ¶ÔÓ¦µÄ¹²ÏíÕ»µØÖ·
-	map<int, list<pair<int, char*> >::iterator> cachemap;//¹²ÏíÕ»»º´æË÷Òı,´æ·ÅĞ­³ÌidºÍÖ¸ÏòlistÖĞ¶ÔÓ¦¿éµÄµü´úÆ÷
-	char* getsharedstack(int id);//ÄÚ²¿Ê¹ÓÃ£¬°ïÖúĞ­³Ì»ñÈ¡¹²ÏíÕ»µØÖ·
-	bool isInCache(int id);//ÄÚ²¿Ê¹ÓÃ£¬ÅĞ¶ÏĞ­³ÌÊÇ·ñÔÚ¹²ÏíÕ»ÖĞ
-	void setCostacksize(int id);//¼ÆËãĞ­³ÌÖ´ĞĞÕ»µÄ³¤¶È
+	vector<pair<char*, int>> shareStackpool;
+	char* getsharedstack(int id);//å†…éƒ¨ä½¿ç”¨ï¼Œå¸®åŠ©åç¨‹è·å–å…±äº«æ ˆåœ°å€
+	bool isInCache(int id);//å†…éƒ¨ä½¿ç”¨ï¼Œåˆ¤æ–­åç¨‹æ˜¯å¦åœ¨å…±äº«æ ˆä¸­
+	void setCostacksize(int id);//è®¡ç®—åç¨‹æ‰§è¡Œæ ˆçš„é•¿åº¦
 };
 
