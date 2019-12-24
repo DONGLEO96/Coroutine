@@ -25,3 +25,12 @@
   func4
   main
   func2
+  func3
+  func2
+  func5
+  main2
+  func3
+  main2
+  func5
+  0000
+  1
