@@ -1,12 +1,13 @@
+
 #include "CoManager.h"
 #include<memory.h>
-CoManager::CoManager(int coroutinemaxnum,int _cachenum):coroutines(coroutinemaxnum,Coroutine()),runid(-1),maxIndex(-1),cachenum(_cachenum),sharedStackpool(_cachenum)
+CoManager::CoManager(int coroutinemaxnum, int _cachenum) :coroutines(coroutinemaxnum, Coroutine()), runid(-1), maxIndex(-1), cachenum(_cachenum), shareStackpool(_cachenum)
 {
 	//sharedstack = new char[STACKSIZE];
-	for (auto it = sharedStackpool.begin(); it != sharedStackpool.end(); ++it)
+	for (auto it = shareStackpool.begin(); it != shareStackpool.end(); ++it)
 	{
-		it->first = -1;
-		it->second = (char*)malloc(STACKSIZE);
+		it->first = (char*)malloc(STACKSIZE);
+		it->second = -1;
 	}
 	for (int i = 0; i < coroutines.size(); ++i)
 	{
@@ -16,9 +17,9 @@ CoManager::CoManager(int coroutinemaxnum,int _cachenum):coroutines(coroutinemaxn
 CoManager::~CoManager()
 {
 	//free(sharedstack);
-	for (auto it = sharedStackpool.begin(); it != sharedStackpool.end(); ++it)
+	for (auto it = shareStackpool.begin(); it != shareStackpool.end(); ++it)
 	{
-		free(it->second);
+		free(it->first);
 	}
 	for (int i = 0; i <= maxIndex; ++i)
 	{
@@ -32,30 +33,45 @@ void CoManager::coresume(int id)
 {
 	if (id<0 || id>maxIndex)
 		return;
+	ucontext_t* currctx = NULL;
+	if (co_record.empty())
+	{
+		currctx = &main_ctx;
+	}
+	else
+	{
+		currctx = &coroutines[co_record.top()].ctx;
+	}
+	co_record.push(id);
 	switch (coroutines[id].state)
 	{
-	case RUNNABLE:
+	case UNINIT:
 	{
 		getcontext(&coroutines[id].ctx);
 		coroutines[id].ctx.uc_stack.ss_sp = getsharedstack(id);//sharedstack;
 		coroutines[id].ctx.uc_stack.ss_size = STACKSIZE;
-		coroutines[id].ctx.uc_link = &main_ctx;
+		coroutines[id].ctx.uc_link = currctx;
 		runid = id;
-		coroutines[id].state = RUNNING;
+		coroutines[id].state = STARTED;
 		makecontext(&coroutines[id].ctx, (void(*)(void))execFunc, 1, this);
-		swapcontext(&main_ctx, &coroutines[id].ctx);
+		swapcontext(currctx, &coroutines[id].ctx);
 		break;
 	}
-	case SUSPEND:
+	case STARTED:
 	{
 		bool isincache = isInCache(id);
 		char* stack = getsharedstack(id);
 		coroutines[id].ctx.uc_stack.ss_sp = stack;
-		if (!isincache)//Èç¹û²»ÔÚ»º´æÖĞ£¬¸´ÖÆ½«»º´æÇøÎÄ¼ş¸´ÖÆµ½¹¤×÷Çø
+		
+		if (!isincache)//å¦‚æœä¸åœ¨ç¼“å­˜ä¸­ï¼Œå¤åˆ¶å°†ç¼“å­˜åŒºæ–‡ä»¶å¤åˆ¶åˆ°å·¥ä½œåŒº
+		{
 			memcpy(stack + STACKSIZE - coroutines[id].size, coroutines[id].stack, coroutines[id].size);
+		}
 		runid = id;
-		coroutines[id].state = RUNNING;
-		swapcontext(&main_ctx, &coroutines[id].ctx);
+
+		coroutines[id].ctx.uc_link = currctx;
+		
+		swapcontext(currctx, &coroutines[id].ctx);
 		break;
 	}
 	default:
@@ -81,8 +97,8 @@ int CoManager::cocreate(Function _func)
 	if (id > maxIndex)
 		maxIndex = id;
 	coroutines[id].func = _func;
-	coroutines[id].state = RUNNABLE;
-	getcontext(&coroutines[id].ctx);
+	coroutines[id].state = UNINIT;
+	//getcontext(&coroutines[id].ctx);
 	//coroutines[id].ctx.uc_stack.ss_flags = 0;
 	//coroutines[id].ctx.uc_stack.ss_sp = coroutines[id].stack;
 	//coroutines[id].ctx.uc_stack.ss_size = STACKSIZE;
@@ -107,7 +123,7 @@ bool CoManager::cofinished()
 void CoManager::codelete(int id)
 {
 	coroutines[id].state = FREE;
-	if(coroutines[id].stack!=NULL)
+	if (coroutines[id].stack != NULL)
 		free(coroutines[id].stack);
 }
 void CoManager::execFunc(CoManager* c)
@@ -117,65 +133,90 @@ void CoManager::execFunc(CoManager* c)
 	{
 		c->coroutines[id].func();
 		c->coroutines[id].state = FREE;
-		if (c->isInCache(id))//Ğ­³ÌÔËĞĞ½áÊøºóµÄÊÕÎ²¹¤×÷£¬Çå³ı»º´æÇø£¬ĞŞ¸ÄĞ­³Ì×´Ì¬£¬ÊÍ·Å¶Ñ¿Õ¼ä
+		if (c->isInCache(id))//åç¨‹è¿è¡Œç»“æŸåçš„æ”¶å°¾å·¥ä½œï¼Œæ¸…é™¤ç¼“å­˜åŒºï¼Œä¿®æ”¹åç¨‹çŠ¶æ€ï¼Œé‡Šæ”¾å †ç©ºé—´
 		{
-			c->cachemap[id]->first = -1;
-			c->cachemap.erase(id);
+			c->shareStackpool[id%c->shareStackpool.size()].second = -1;
 		}
 		free(c->coroutines[id].stack);
 		c->coroutines[id].stack = NULL;
-		c->runid = -1;
+		c->co_record.pop();
+		if (c->co_record.empty())
+			c->runid = -1;
+		else
+			c->runid = c->co_record.top();
 	}
 }
 
 char * CoManager::getsharedstack(int id)
 {
-	if (cachemap.find(id) != cachemap.end())//Èç¹ûÔÚ»º´æÖĞ£¬Ö±½ÓÓÃ
+	if (shareStackpool[id%shareStackpool.size()].second == id)//å¦‚æœåœ¨ç¼“å­˜ä¸­ï¼Œç›´æ¥ä½¿ç”¨
 	{
-		sharedStackpool.push_front(*cachemap[id]);
-		sharedStackpool.erase(cachemap[id]);
-		cachemap[id] = sharedStackpool.begin();
-		return sharedStackpool.begin()->second;
+		return shareStackpool[id%shareStackpool.size()].first;
 	}
-	else//Èç¹û²»ÔÚ»º´æÖĞ
+	else
 	{
-		if (cachemap.size() < cachenum)//Èç¹û»º´æÖĞ»¹ÓĞ»¹ÓĞÊ£ÓàµÄÎ»ÖÃ
+		if (shareStackpool[id%shareStackpool.size()].second == -1)//å¦‚æœè¿˜æ²¡æœ‰ä½¿ç”¨è¿‡
 		{
-			auto it = sharedStackpool.begin();
-			for (; it != sharedStackpool.end(); ++it)
-			{
-				if (it->first == -1)
-					break;
-			}
-			sharedStackpool.push_front(*it);
-			sharedStackpool.erase(it);
-			cachemap[id] = sharedStackpool.begin();
-			sharedStackpool.begin()->first = id;
-			return sharedStackpool.begin()->second;//½«¿Õ¼ä·µ»Ø¸øÊ¹ÓÃÕß
+			shareStackpool[id%shareStackpool.size()].second = id;
+			return shareStackpool[id%shareStackpool.size()].first;
 		}
-		else//Èç¹û»º´æÒÑ¾­ÂúÁË
+		else//å¦‚æœè¢«åˆ«äººä½¿ç”¨äº†
 		{
-			auto it = (--sharedStackpool.end());//ĞèÒª±»Çå³ıµÄÊı¾İ
-			//½«Êı¾İ±£´æ¸ø¶ÔÓ¦µÄĞ­³Ì£¬È»ºó¸øĞÂĞ­³ÌÊ¹ÓÃ
-			if(coroutines[it->first].stack)
-				free(coroutines[it->first].stack);
-			coroutines[it->first].stack = (char*)malloc(coroutines[it->first].size);
-			memcpy(coroutines[it->first].stack, it->second + STACKSIZE - coroutines[it->first].size, coroutines[it->first].size);
-			//±¸·İÍê³Éºó½«ĞÂµÄÊı¾İ·Å½ø¹²ÏíÕ»
+			int currid = shareStackpool[id%shareStackpool.size()].second;
+			if (coroutines[currid].stack != NULL)
+				free(coroutines[currid].stack);
+			coroutines[currid].stack = (char*)malloc(coroutines[currid].size);
+			memcpy(coroutines[currid].stack, shareStackpool[id%shareStackpool.size()].first + STACKSIZE - coroutines[currid].size, coroutines[currid].size);
+			shareStackpool[id%shareStackpool.size()].second = id;
+			return shareStackpool[id%shareStackpool.size()].first;
+		}
+	}
+	//if (cachemap.find(id) != cachemap.end())//å¦‚æœåœ¨ç¼“å­˜ä¸­ï¼Œç›´æ¥ç”¨
+	//{
+	//	sharedStackpool.push_front(*cachemap[id]);
+	//	sharedStackpool.erase(cachemap[id]);
+	//	cachemap[id] = sharedStackpool.begin();
+	//	return sharedStackpool.begin()->second;
+	//}
+	//else//å¦‚æœä¸åœ¨ç¼“å­˜ä¸­
+	//{
+	//	if (cachemap.size() < cachenum)//å¦‚æœç¼“å­˜ä¸­è¿˜æœ‰è¿˜æœ‰å‰©ä½™çš„ä½ç½®
+	//	{
+	//		auto it = sharedStackpool.begin();
+	//		for (; it != sharedStackpool.end(); ++it)
+	//		{
+	//			if (it->first == -1)
+	//				break;
+	//		}
+	//		sharedStackpool.push_front(*it);
+	//		sharedStackpool.erase(it);
+	//		cachemap[id] = sharedStackpool.begin();
+	//		sharedStackpool.begin()->first = id;
+	//		return sharedStackpool.begin()->second;//å°†ç©ºé—´è¿”å›ç»™ä½¿ç”¨è€…
+	//	}
+	//	else//å¦‚æœç¼“å­˜å·²ç»æ»¡äº†
+	//	{
+	//		auto it = (--sharedStackpool.end());//éœ€è¦è¢«æ¸…é™¤çš„æ•°æ®
+	//		//å°†æ•°æ®ä¿å­˜ç»™å¯¹åº”çš„åç¨‹ï¼Œç„¶åç»™æ–°åç¨‹ä½¿ç”¨
+	//		if (coroutines[it->first].stack)
+	//			free(coroutines[it->first].stack);
+	//		coroutines[it->first].stack = (char*)malloc(coroutines[it->first].size);
+	//		memcpy(coroutines[it->first].stack, it->second + STACKSIZE - coroutines[it->first].size, coroutines[it->first].size);
+	//		//å¤‡ä»½å®Œæˆåå°†æ–°çš„æ•°æ®æ”¾è¿›å…±äº«æ ˆ
 
-			sharedStackpool.push_front(*it);
-			sharedStackpool.pop_back();
-			cachemap.erase(it->first);//É¾³ıÔ­Ë÷Òı
-			sharedStackpool.begin()->first = id;
-			cachemap[id] = sharedStackpool.begin();//ÉèÖÃĞÂµÄË÷Òı
-			return sharedStackpool.begin()->second;
-		}
-	}
-}
+	//		sharedStackpool.push_front(*it);
+	//		sharedStackpool.pop_back();
+	//		cachemap.erase(it->first);//åˆ é™¤åŸç´¢å¼•
+	//		sharedStackpool.begin()->first = id;
+	//		cachemap[id] = sharedStackpool.begin();//è®¾ç½®æ–°çš„ç´¢å¼•
+	//		return sharedStackpool.begin()->second;
+	//	}
+	//}
+ }
 
 bool CoManager::isInCache(int id)
 {
-	if (cachemap.find(id) != cachemap.end())
+	if (shareStackpool[id%shareStackpool.size()].second==id)
 		return true;
 	else
 		return false;
@@ -184,22 +225,34 @@ bool CoManager::isInCache(int id)
 void CoManager::setCostacksize(int id)
 {
 	char dummy = 0;
-	coroutines[id].size = cachemap[id]->second + STACKSIZE - &dummy;
-	//coroutines[id].size = sharedstack + STACKSIZE - &dummy;
-	//free(coroutines[id].stack);
-	//coroutines[id].stack = (char*)malloc(coroutines[id].size);
-	//memcpy(coroutines[id].stack, &dummy, coroutines[id].size);
+	coroutines[id].size = shareStackpool[id%shareStackpool.size()].first + STACKSIZE - &dummy;
 }
 
 void CoManager::coyield()
 {
-	if (runid != -1)
+	if (!co_record.empty())//åœ¨ä¸»åç¨‹ä¸­yieldæ— æ•ˆ
 	{
-		coroutines[runid].state = SUSPEND;
-		int id = runid;
+		int id = co_record.top();
+		co_record.pop();
+		const ucontext_t* nextctx = NULL;
+		if (co_record.empty())
+		{
+			
+			nextctx = &main_ctx;
+			runid = -1;
+		}
+		else
+		{
+			runid = co_record.top();
+			nextctx = &coroutines[co_record.top()].ctx;
+			bool isincache = isInCache(id);
+			char* stack = getsharedstack(id);
+			coroutines[runid].ctx.uc_stack.ss_sp = stack;
+			if (!isincache)
+				memcpy(stack + STACKSIZE - coroutines[runid].size, coroutines[runid].stack, coroutines[runid].size);
+		}
 		//savestack(id);
-		setCostacksize(id);//Ö»ÉèÖÃºÃÕ»µÄ³¤¶È£¬ÔİÊ±²»½«Êı¾İÒÆ³ö¹²ÏíÇø
-		runid = -1;
-		swapcontext(&coroutines[id].ctx, &main_ctx);
+		setCostacksize(id);//åªè®¾ç½®å¥½æ ˆçš„é•¿åº¦ï¼Œæš‚æ—¶ä¸å°†æ•°æ®ç§»å‡ºå…±äº«åŒº
+		swapcontext(&coroutines[id].ctx, nextctx);
 	}
 }
